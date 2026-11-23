@@ -114,6 +114,99 @@ def write_tests(file):
     return check(f"{len(tests)} tests saved in tests/test_{name}.py", len(tests) > 0)
 
 
+
+def fix_bugs(file):
+    """Use the bug-fixer skill to repair a Python file from its bug reports."""
+    name = file.replace(".py", "")
+    report_path = f"reports/{name}.md"
+
+    if not os.path.exists(report_path):
+        return check(
+            "bug reports found", False,
+            f'run find_bugs("{file}") first'
+        )
+
+    original_code = open(file, encoding="utf-8").read()
+    reports = split_reports(
+        open(report_path, encoding="utf-8").read()
+    )
+
+    if not reports:
+        return check("valid bug reports found", False)
+
+    prompt = (
+        f"## File: {file}\n"
+        f"```python\n{original_code}\n```\n\n"
+        "## Bug reports\n"
+        + "\n\n".join(reports)
+        + "\n\nReturn the complete corrected Python source code."
+    )
+
+    response = ask(
+        skill("bug-fixer"),
+        prompt,
+        max_new_tokens=1200
+    )
+
+    corrected_code = response.strip()
+
+    match = re.search(
+        r"```(?:python)?\s*\n(.*?)```",
+        corrected_code,
+        re.S
+    )
+
+    if match:
+        corrected_code = match.group(1).strip()
+
+    try:
+        compile(corrected_code, file, "exec")
+    except SyntaxError as e:
+        return check(
+            "generated fix has valid Python syntax",
+            False, str(e)
+        )
+
+    import ast
+
+    def functions(code):
+        tree = ast.parse(code)
+        return {
+            node.name
+            for node in tree.body
+            if isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef)
+            )
+        }
+
+    missing = functions(original_code) - functions(corrected_code)
+
+    if missing:
+        return check(
+            "original functions preserved", False,
+            f"Missing functions: {sorted(missing)}"
+        )
+
+    if corrected_code == original_code.strip():
+        return check(
+            "bug fixer changed the source", False,
+            "The model returned the original code unchanged."
+        )
+
+    backup_path = file + ".bak"
+
+    with open(backup_path, "w", encoding="utf-8") as f:
+        f.write(original_code)
+
+    with open(file, "w", encoding="utf-8") as f:
+        f.write(corrected_code + "\n")
+
+    print(f"[OK]   backup saved to {backup_path}")
+    print(f"[OK]   corrected source saved to {file}")
+
+    return True
+
+
 def run_tests(file):
     """Runs the tests of one exercise file and shows which pass and which fail."""
     name = file.replace(".py", "")
